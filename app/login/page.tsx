@@ -37,15 +37,47 @@ export default function LoginPage() {
       return;
     }
 
-    const { error: authError } =
-      mode === "login"
-        ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password });
+    if (mode === "login") {
+      const { error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (authError) {
-      setError(authError.message);
+      if (authError) {
+        setError(authError.message);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(false);
+      router.replace("/");
+      return;
+    }
+
+    const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+
+    if (signUpError) {
+      setError(signUpError.message);
       setLoading(false);
       return;
+    }
+
+    if (!signUpData.session) {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (signInError) {
+        setError(
+          "Account created, but email confirmation is required before you can sign in.",
+        );
+        setLoading(false);
+        return;
+      }
     }
 
     setLoading(false);

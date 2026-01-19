@@ -31,6 +31,20 @@ export default function HomePage() {
   const [leverage, setLeverage] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const [formLoading, setFormLoading] = useState(false);
+  const [editTradeId, setEditTradeId] = useState<string | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editLoading, setEditLoading] = useState(false);
+  const [editForm, setEditForm] = useState({
+    pair: "",
+    mode: "SPOT" as TradeMode,
+    direction: "LONG" as TradeDirection,
+    entryPrice: "",
+    stopLoss: "",
+    takeProfit: "",
+    margin: "",
+    leverage: "",
+    closePrice: "",
+  });
   const [closePriceOverrides, setClosePriceOverrides] = useState<
     Record<string, string>
   >({});
@@ -143,6 +157,27 @@ export default function HomePage() {
     setLeverage("");
   };
 
+  const startEditTrade = (trade: Trade) => {
+    setEditError(null);
+    setEditTradeId(trade.id);
+    setEditForm({
+      pair: trade.pair ?? "",
+      mode: trade.mode,
+      direction: trade.direction ?? "LONG",
+      entryPrice: trade.entry_price?.toString() ?? "",
+      stopLoss: trade.stop_loss?.toString() ?? "",
+      takeProfit: trade.take_profit?.toString() ?? "",
+      margin: trade.margin?.toString() ?? "",
+      leverage: trade.leverage?.toString() ?? "",
+      closePrice: trade.close_price?.toString() ?? "",
+    });
+  };
+
+  const cancelEditTrade = () => {
+    setEditTradeId(null);
+    setEditError(null);
+  };
+
   const handleOpenTrade = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setFormError(null);
@@ -191,6 +226,90 @@ export default function HomePage() {
 
     resetForm();
     setFormLoading(false);
+    void loadTrades();
+  };
+
+  const handleUpdateTrade = async (trade: Trade) => {
+    setEditError(null);
+
+    if (!supabase) {
+      setEditError("Supabase is not configured.");
+      return;
+    }
+
+    const entry = parseNumber(editForm.entryPrice);
+    const stop = parseNumber(editForm.stopLoss);
+    const take = parseNumber(editForm.takeProfit);
+    const marginValue = parseNumber(editForm.margin);
+    const leverageValue = parseNumber(editForm.leverage);
+    const closeValue = parseNumber(editForm.closePrice);
+
+    if (!editForm.pair || !entry || !marginValue) {
+      setEditError("Please fill out pair, entry price, and margin.");
+      return;
+    }
+
+    if (trade.status !== "OPEN" && !closeValue) {
+      setEditError("Please provide a close price for closed trades.");
+      return;
+    }
+
+    setEditLoading(true);
+
+    const updatePayload: Partial<Trade> = {
+      pair: editForm.pair.toUpperCase(),
+      mode: editForm.mode,
+      direction: editForm.mode === "FUTURES" ? editForm.direction : null,
+      leverage: editForm.mode === "FUTURES" ? leverageValue ?? 1 : null,
+      margin: marginValue,
+      entry_price: entry,
+      stop_loss: stop,
+      take_profit: take,
+    };
+
+    if (trade.status !== "OPEN" && closeValue) {
+      const calculated = calculatePnl({
+        mode: editForm.mode,
+        direction: editForm.mode === "FUTURES" ? editForm.direction : null,
+        entryPrice: entry,
+        exitPrice: closeValue,
+        margin: marginValue,
+        leverage: editForm.mode === "FUTURES" ? leverageValue : null,
+      });
+
+      if (!calculated) {
+        setEditError("Unable to calculate PnL with the provided values.");
+        setEditLoading(false);
+        return;
+      }
+
+      updatePayload.close_price = closeValue;
+      updatePayload.pnl = calculated.pnl;
+      updatePayload.pnl_percent = calculated.pnlPercent;
+    }
+
+    const { error } = await supabase
+      .from("trades")
+      .update(updatePayload)
+      .eq("id", trade.id);
+
+    if (error) {
+      setEditError(error.message);
+      setEditLoading(false);
+      return;
+    }
+
+    setEditLoading(false);
+    setEditTradeId(null);
+    void loadTrades();
+  };
+
+  const handleDeleteTrade = async (tradeId: string) => {
+    if (!supabase) {
+      return;
+    }
+
+    await supabase.from("trades").delete().eq("id", tradeId);
     void loadTrades();
   };
 
@@ -600,6 +719,21 @@ export default function HomePage() {
                         </span>
                       </div>
 
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                        <button
+                          onClick={() => startEditTrade(trade)}
+                          className="rounded-lg border border-slate-700 px-3 py-2 font-semibold text-slate-200 transition hover:border-slate-500"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDeleteTrade(trade.id)}
+                          className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 font-semibold text-rose-200"
+                        >
+                          Delete
+                        </button>
+                      </div>
+
                       <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
                         <input
                           value={closeOverride}
@@ -625,6 +759,129 @@ export default function HomePage() {
                           Close early
                         </button>
                       </div>
+
+                      {editTradeId === trade.id ? (
+                        <div className="mt-4 space-y-3 rounded-lg border border-slate-800 bg-slate-950/40 p-4">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <input
+                              value={editForm.pair}
+                              onChange={event =>
+                                setEditForm(prev => ({
+                                  ...prev,
+                                  pair: event.target.value,
+                                }))
+                              }
+                              placeholder="Pair"
+                              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                            />
+                            <select
+                              value={editForm.mode}
+                              onChange={event =>
+                                setEditForm(prev => ({
+                                  ...prev,
+                                  mode: event.target.value as TradeMode,
+                                }))
+                              }
+                              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                            >
+                              <option value="SPOT">SPOT</option>
+                              <option value="FUTURES">FUTURES</option>
+                            </select>
+                            {editForm.mode === "FUTURES" ? (
+                              <select
+                                value={editForm.direction}
+                                onChange={event =>
+                                  setEditForm(prev => ({
+                                    ...prev,
+                                    direction: event.target.value as TradeDirection,
+                                  }))
+                                }
+                                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                              >
+                                <option value="LONG">LONG</option>
+                                <option value="SHORT">SHORT</option>
+                              </select>
+                            ) : null}
+                            <input
+                              value={editForm.entryPrice}
+                              onChange={event =>
+                                setEditForm(prev => ({
+                                  ...prev,
+                                  entryPrice: event.target.value,
+                                }))
+                              }
+                              placeholder="Entry price"
+                              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                            />
+                            <input
+                              value={editForm.stopLoss}
+                              onChange={event =>
+                                setEditForm(prev => ({
+                                  ...prev,
+                                  stopLoss: event.target.value,
+                                }))
+                              }
+                              placeholder="Stop loss"
+                              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                            />
+                            <input
+                              value={editForm.takeProfit}
+                              onChange={event =>
+                                setEditForm(prev => ({
+                                  ...prev,
+                                  takeProfit: event.target.value,
+                                }))
+                              }
+                              placeholder="Take profit"
+                              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                            />
+                            <input
+                              value={editForm.margin}
+                              onChange={event =>
+                                setEditForm(prev => ({
+                                  ...prev,
+                                  margin: event.target.value,
+                                }))
+                              }
+                              placeholder="Margin"
+                              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                            />
+                            {editForm.mode === "FUTURES" ? (
+                              <input
+                                value={editForm.leverage}
+                                onChange={event =>
+                                  setEditForm(prev => ({
+                                    ...prev,
+                                    leverage: event.target.value,
+                                  }))
+                                }
+                                placeholder="Leverage"
+                                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                              />
+                            ) : null}
+                          </div>
+                          {editError ? (
+                            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                              {editError}
+                            </div>
+                          ) : null}
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              onClick={() => handleUpdateTrade(trade)}
+                              disabled={editLoading}
+                              className="rounded-lg bg-indigo-500 px-4 py-2 text-xs font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                            >
+                              {editLoading ? "Saving..." : "Save changes"}
+                            </button>
+                            <button
+                              onClick={cancelEditTrade}
+                              className="rounded-lg border border-slate-700 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:border-slate-500"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
 
                       <div className="mt-3 flex flex-wrap gap-2 text-xs">
                         <button
@@ -677,6 +934,20 @@ export default function HomePage() {
                         {trade.status}
                       </span>
                     </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                      <button
+                        onClick={() => startEditTrade(trade)}
+                        className="rounded-lg border border-slate-700 px-3 py-2 font-semibold text-slate-200 transition hover:border-slate-500"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => handleDeleteTrade(trade.id)}
+                        className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 font-semibold text-rose-200"
+                      >
+                        Delete
+                      </button>
+                    </div>
                     <div className="mt-3 flex items-center justify-between text-sm">
                       <span
                         className={`font-semibold ${
@@ -691,6 +962,139 @@ export default function HomePage() {
                         {(trade.pnl_percent ?? 0).toFixed(2)}%
                       </span>
                     </div>
+                    {editTradeId === trade.id ? (
+                      <div className="mt-4 space-y-3 rounded-lg border border-slate-800 bg-slate-950/40 p-4">
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <input
+                            value={editForm.pair}
+                            onChange={event =>
+                              setEditForm(prev => ({
+                                ...prev,
+                                pair: event.target.value,
+                              }))
+                            }
+                            placeholder="Pair"
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                          />
+                          <select
+                            value={editForm.mode}
+                            onChange={event =>
+                              setEditForm(prev => ({
+                                ...prev,
+                                mode: event.target.value as TradeMode,
+                              }))
+                            }
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                          >
+                            <option value="SPOT">SPOT</option>
+                            <option value="FUTURES">FUTURES</option>
+                          </select>
+                          {editForm.mode === "FUTURES" ? (
+                            <select
+                              value={editForm.direction}
+                              onChange={event =>
+                                setEditForm(prev => ({
+                                  ...prev,
+                                  direction: event.target.value as TradeDirection,
+                                }))
+                              }
+                              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                            >
+                              <option value="LONG">LONG</option>
+                              <option value="SHORT">SHORT</option>
+                            </select>
+                          ) : null}
+                          <input
+                            value={editForm.entryPrice}
+                            onChange={event =>
+                              setEditForm(prev => ({
+                                ...prev,
+                                entryPrice: event.target.value,
+                              }))
+                            }
+                            placeholder="Entry price"
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                          />
+                          <input
+                            value={editForm.stopLoss}
+                            onChange={event =>
+                              setEditForm(prev => ({
+                                ...prev,
+                                stopLoss: event.target.value,
+                              }))
+                            }
+                            placeholder="Stop loss"
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                          />
+                          <input
+                            value={editForm.takeProfit}
+                            onChange={event =>
+                              setEditForm(prev => ({
+                                ...prev,
+                                takeProfit: event.target.value,
+                              }))
+                            }
+                            placeholder="Take profit"
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                          />
+                          <input
+                            value={editForm.margin}
+                            onChange={event =>
+                              setEditForm(prev => ({
+                                ...prev,
+                                margin: event.target.value,
+                              }))
+                            }
+                            placeholder="Margin"
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                          />
+                          {editForm.mode === "FUTURES" ? (
+                            <input
+                              value={editForm.leverage}
+                              onChange={event =>
+                                setEditForm(prev => ({
+                                  ...prev,
+                                  leverage: event.target.value,
+                                }))
+                              }
+                              placeholder="Leverage"
+                              className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                            />
+                          ) : null}
+                          <input
+                            value={editForm.closePrice}
+                            onChange={event =>
+                              setEditForm(prev => ({
+                                ...prev,
+                                closePrice: event.target.value,
+                              }))
+                            }
+                            placeholder="Close price"
+                            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                          />
+                        </div>
+                        {editError ? (
+                          <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                            {editError}
+                          </div>
+                        ) : null}
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => handleUpdateTrade(trade)}
+                            disabled={editLoading}
+                            className="rounded-lg bg-indigo-500 px-4 py-2 text-xs font-semibold text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            {editLoading ? "Saving..." : "Save changes"}
+                          </button>
+                          <button
+                            onClick={cancelEditTrade}
+                            className="rounded-lg border border-slate-700 px-4 py-2 text-xs font-semibold text-slate-200 transition hover:border-slate-500"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ))
               )}
